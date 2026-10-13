@@ -197,6 +197,31 @@ export const freshSave = (today: string): Save => ({
   nextQuestId: 1,
 })
 
+/**
+ * Reads a stored save of any age. Fields an older version lacks get their
+ * fresh defaults; everything the save holds is kept. An update to the plugin
+ * must never cost a player their progress, so only a save that is not an
+ * object at all starts over.
+ */
+export const loadSave = (stored: unknown, today: string): Save => {
+  const base = freshSave(today)
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return base
+  const s = stored as Partial<Save>
+  return {
+    ...base,
+    ...s,
+    version: 1,
+    dayXp: { ...s.dayXp },
+    passiveDayXp: { ...s.passiveDayXp },
+    counters: { ...base.counters, ...s.counters },
+    achievements: { ...s.achievements },
+    titles: [...new Set([...(s.titles ?? []), ...base.titles])],
+    inventory: Array.isArray(s.inventory) ? s.inventory : [],
+    quests: Array.isArray(s.quests) ? s.quests : base.quests,
+    log: Array.isArray(s.log) ? s.log : [],
+  }
+}
+
 export const isQuestReady = (q: Quest) => q.status === 'active' && q.tasks.every(t => t.done)
 
 /**

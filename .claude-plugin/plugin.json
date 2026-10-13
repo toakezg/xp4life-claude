@@ -5,5 +5,15 @@
   "author": {
     "name": "toakezg"
   },
+  "homepage": "https://github.com/toakezg/xp4life-claude",
+  "repository": "https://github.com/toakezg/xp4life-claude",
+  "license": "MIT",
+  "keywords": [
+    "gamification",
+    "rpg",
+    "xp",
+    "quests",
+    "achievements"
+  ],
   "types": "./types/index.d.ts"
 }

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { apply } from '../hooks/engine'
-import { COMMIT, PASSIVE, QUEST_XP, TESTS, commandWords, freshSave, levelOf, xpForLevel } from '../hooks/rules'
+import { COMMIT, PASSIVE, QUEST_XP, TESTS, commandWords, freshSave, levelOf, loadSave, xpForLevel } from '../hooks/rules'
 
 const NOW = Date.UTC(2026, 9, 13, 12)
 const start = () => freshSave('2026-10-13')
@@ -109,5 +109,28 @@ describe('what counts as a command', () => {
   test('a heredoc commit message still counts as the commit', async () => {
     expect(commits("git commit -q -F - <<'EOF'\nAdd the thing\n\nRan pytest first\nEOF")).toBe(true)
     expect(tests("git commit -q -F - <<'EOF'\nAdd the thing\n\nRan pytest first\nEOF")).toBe(false)
+  })
+})
+describe('saves survive updates', () => {
+  test('an older save keeps its progress and gains the new fields', async () => {
+    const old = { version: 1, xp: 640, counters: { commits: 12 }, titles: ['Wanderer', 'Toolsmith'], equipped: 'Toolsmith', quests: [] }
+    const save = loadSave(old, '2026-10-13')
+    expect(save.xp).toBe(640)
+    expect(save.counters.commits).toBe(12)
+    expect(save.counters.bugsSlain).toBe(0)
+    expect(save.equipped).toBe('Toolsmith')
+    expect(save.titles).toContain('Vault Architect')
+    expect(save.quests).toEqual([])
+  })
+
+  test('a save from a newer version is kept, not reset', async () => {
+    const save = loadSave({ ...freshSave('2026-10-01'), version: 2, xp: 900 }, '2026-10-13')
+    expect(save.xp).toBe(900)
+    expect(save.startedOn).toBe('2026-10-01')
+  })
+
+  test('only nothing at all starts a fresh world', async () => {
+    expect(loadSave(undefined, '2026-10-13').xp).toBe(0)
+    expect(loadSave('junk', '2026-10-13').quests[0]?.id).toBe('awakening-1')
   })
 })

@@ -16,6 +16,7 @@ import {
   TIER_COLOR,
   dayOf,
   freshSave,
+  loadSave,
   isQuestReady,
   levelOf,
   streakOf,
@@ -321,8 +322,8 @@ const questBrief = (s: Save) => {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const now = await $.clock.now()
-    const stored = (await $.store.get('save')) as Save | undefined
-    const loaded = stored?.version === 1 ? stored : freshSave(dayOf(now))
+    const stored = await $.store.get('save')
+    const loaded = loadSave(stored, dayOf(now))
     if (!stored) await $.store.set('save', loaded)
     await update($, save, () => loaded)
 

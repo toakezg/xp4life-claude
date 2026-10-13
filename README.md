@@ -78,8 +78,21 @@ Levels need 100, 300, 600, 1000, ... XP in total (`50 * (L - 1) * L`).
 its own tasks done with evidence. It picks a tier, never an XP amount, and only
 you claim rewards. Tasks marked *(auto)* tick themselves when the work happens.
 
-**Your save** lives in the plugin's own store under your Claude Code config, so
-it carries across sessions and projects.
+## Your progress
+
+Everyone starts a fresh world at level 1. Your save is yours alone: it lives in
+the plugin's store under your Claude Code config
+(`~/.claude/plugins/store/`), never in this repository, so it carries across
+sessions and projects and nobody else's progress ships with the plugin.
+
+Updating the plugin replaces its code, not your save. A save from an older
+version is read as it is and gains any new fields with their defaults; the
+plugin never resets a save it can read. To start over, delete the `xp4life`
+file in that folder.
+
+## Status
+
+An early, playable prototype. Expect the numbers and content to change.
 
 ## Develop
 
@@ -97,3 +110,7 @@ The art is baked into `hooks/loot.ts` by `tools/gen_loot.py` (needs Pillow):
 ```
 python tools/gen_loot.py <XP4Life Assets dir> assets/emblem-terminal.png hooks/loot.ts
 ```
+
+## License
+
+MIT, see [LICENSE](LICENSE).
