@@ -1,0 +1,13 @@
+{
+  "name": "xp4life",
+  "owner": {
+    "name": "toakezg"
+  },
+  "description": "XP4Life: a light RPG layer (XP, quests, titles, loot) over real work in Claude Code.",
+  "plugins": [
+    {
+      "name": "xp4life",
+      "source": "./"
+    }
+  ]
+}

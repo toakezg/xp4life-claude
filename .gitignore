@@ -1,0 +1,5 @@
+# Laid by Claude Code at each load: the API types for this build.
+.claude-plugin/types/
+__pycache__/
+*.pyc
+node_modules/

@@ -1,0 +1,9 @@
+{
+  "name": "xp4life",
+  "version": "0.1.0",
+  "description": "XP4Life for Claude Code: earn XP from real proof of work, run quest chains, unlock achievements and titles, and collect loot, all in the terminal.",
+  "author": {
+    "name": "toakezg"
+  },
+  "types": "./types/index.d.ts"
+}
