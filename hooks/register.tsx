@@ -8,6 +8,7 @@ import { ART_COLUMNS, ART_ROWS, EMBLEM, EMBLEM_COLUMNS, EMBLEM_ROWS, LOOT } from
 import {
   ACHIEVEMENTS,
   COMMIT,
+  commandWords,
   LEGACY_TITLES,
   PASSIVE,
   QUEST_XP,
@@ -379,8 +380,9 @@ export const register: Register = on => {
     if ((tool !== 'Bash' && tool !== 'PowerShell') || typeof input.command !== 'string' || input.run_in_background === true) {
       return next(e)
     }
-    const isCommit = COMMIT.test(input.command)
-    const isTest = TESTS.test(input.command)
+    const words = commandWords(input.command)
+    const isCommit = COMMIT.test(words)
+    const isTest = TESTS.test(words)
     if (!isCommit && !isTest) return next(e)
 
     const ran = await next(e)

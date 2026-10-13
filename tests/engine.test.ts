@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { apply } from '../hooks/engine'
-import { PASSIVE, QUEST_XP, freshSave, levelOf, xpForLevel } from '../hooks/rules'
+import { COMMIT, PASSIVE, QUEST_XP, TESTS, commandWords, freshSave, levelOf, xpForLevel } from '../hooks/rules'
 
 const NOW = Date.UTC(2026, 9, 13, 12)
 const start = () => freshSave('2026-10-13')
@@ -86,4 +86,28 @@ test('the level curve', async () => {
   expect(levelOf(99)).toBe(1)
   expect(levelOf(100)).toBe(2)
   expect(levelOf(xpForLevel(10))).toBe(10)
+})
+describe('what counts as a command', () => {
+  const commits = (c: string) => COMMIT.test(commandWords(c))
+  const tests = (c: string) => TESTS.test(commandWords(c))
+
+  test('real commits and test runs count', async () => {
+    expect(commits('git add -A && git commit -m "fix tests"')).toBe(true)
+    expect(commits('git -C repo commit -q -F msg.txt')).toBe(true)
+    expect(tests('npm test')).toBe(true)
+    expect(tests('cd x && claude plugin test .')).toBe(true)
+  })
+
+  test('words inside quotes, heredocs and here-strings do not', async () => {
+    expect(tests('git commit -m "run pytest before merging"')).toBe(false)
+    expect(commits('echo "remember to git commit"')).toBe(false)
+    expect(commits("cat > README.md <<'EOF'\nA commit lands (git commit succeeds)\nclaude plugin test .\nEOF")).toBe(false)
+    expect(tests("cat > README.md <<'EOF'\nclaude plugin test .\nEOF")).toBe(false)
+    expect(commits("$readme = @'\ngit commit\n'@\nSet-Content README.md $readme")).toBe(false)
+  })
+
+  test('a heredoc commit message still counts as the commit', async () => {
+    expect(commits("git commit -q -F - <<'EOF'\nAdd the thing\n\nRan pytest first\nEOF")).toBe(true)
+    expect(tests("git commit -q -F - <<'EOF'\nAdd the thing\n\nRan pytest first\nEOF")).toBe(false)
+  })
 })

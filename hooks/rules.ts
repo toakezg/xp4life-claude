@@ -199,6 +199,16 @@ export const freshSave = (today: string): Save => ({
 
 export const isQuestReady = (q: Quest) => q.status === 'active' && q.tasks.every(t => t.done)
 
+/**
+ * The command as the shell runs it, without the text it carries: heredoc
+ * bodies, PowerShell here-strings and quoted strings. A commit message or a
+ * file written with `cat <<EOF` that mentions `git commit` is not a commit.
+ */
+export const commandWords = (command: string) =>
+  command
+    .replace(/<<-?\s*(['"]?)(\w+)\1[^\n]*\n[\s\S]*?\n\s*\2[ \t]*(?=\n|$)/g, ' ')
+    .replace(/@(['"])\r?\n[\s\S]*?\r?\n\1@/g, ' ')
+    .replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""')
 /** Commands that count as landing a commit or running tests. */
 export const COMMIT = /\bgit\b(?:\s+-\S+(?:\s+\S+)?)*\s+commit\b(?![^|;&]*--dry-run)/
 export const TESTS =
