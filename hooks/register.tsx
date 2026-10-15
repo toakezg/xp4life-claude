@@ -41,16 +41,47 @@ const flash = atom({ plugin: 'xp4life', key: 'flash' } as const, null)
 const openLog = ($: EngineInterface) =>
   $.ui.open({ id: PANE, title: 'XP4Life', focus: true, closeOnEscape: true })
 
+/**
+ * The stored save is the truth: other sessions (and background jobs) write to it too,
+ * so this session's copy can be stale. Read it fresh, or null if nothing is stored yet.
+ */
+const fromStore = async ($: EngineInterface, now: number) => {
+  const stored = await $.store.get('save')
+  return stored ? loadSave(stored, dayOf(now)) : null
+}
+
+/**
+ * Runs this session's reads and writes of the save one at a time, so two events landing
+ * together (a claim press during a test run) each start from the other's result.
+ * Sessions still race each other: the store has no conditional write to stop that.
+ */
+let queue: Promise<unknown> = Promise.resolve()
+const inTurn = <T,>(work: () => Promise<T>) => {
+  const run = queue.then(work)
+  queue = run.catch(() => undefined)
+  return run
+}
+
+/** Refreshes this session's copy from the store, so the log and band show what other sessions did. */
+const sync = ($: EngineInterface) =>
+  inTurn(async () => {
+    const fresh = await fromStore($, await $.clock.now())
+    if (fresh) await update($, save, () => fresh)
+  })
+
 /** Applies an event, saves it across sessions, and toasts what happened. */
 const dispatch = async ($: EngineInterface, event: GameEvent) => {
-  const now = await $.clock.now()
-  const box: { out?: ReturnType<typeof apply> } = {}
-  const next = await update($, save, s => {
-    box.out = apply(s, event, now)
-    return box.out.save
+  const out = await inTurn(async () => {
+    const now = await $.clock.now()
+    const fresh = await fromStore($, now)
+    const box: { out?: ReturnType<typeof apply> } = {}
+    const next = await update($, save, s => {
+      box.out = apply(fresh ?? s, event, now)
+      return box.out.save
+    })
+    await $.store.set('save', next)
+    return box.out
   })
-  await $.store.set('save', next)
-  const out = box.out
   if (out?.flash) {
     const shown = out.flash
     await update($, flash, () => shown)
@@ -438,11 +469,13 @@ export const register: Register = on => {
   on('command.run', { command: 'quest' }, async ($, e) => {
     const wanted = TABS.find(t => t.id === e.args.trim().toLowerCase())
     if (wanted) await update($, tab, () => wanted.id)
+    await sync($)
     await openLog($)
     return { text: 'Opened the XP4Life quest log.' }
   })
 
   on('command.run', { command: 'xp' }, async $ => {
+    await sync($)
     const s = await read($, save)
     return { text: summaryText(s, await $.clock.now()) }
   })
