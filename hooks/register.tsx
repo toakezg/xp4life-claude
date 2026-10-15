@@ -50,23 +50,38 @@ const fromStore = async ($: EngineInterface, now: number) => {
   return stored ? loadSave(stored, dayOf(now)) : null
 }
 
-/** Refreshes this session's copy from the store, so the log and band show what other sessions did. */
-const sync = async ($: EngineInterface) => {
-  const fresh = await fromStore($, await $.clock.now())
-  if (fresh) await update($, save, () => fresh)
+/**
+ * Runs this session's reads and writes of the save one at a time, so two events landing
+ * together (a claim press during a test run) each start from the other's result.
+ * Sessions still race each other: the store has no conditional write to stop that.
+ */
+let queue: Promise<unknown> = Promise.resolve()
+const inTurn = <T,>(work: () => Promise<T>) => {
+  const run = queue.then(work)
+  queue = run.catch(() => undefined)
+  return run
 }
+
+/** Refreshes this session's copy from the store, so the log and band show what other sessions did. */
+const sync = ($: EngineInterface) =>
+  inTurn(async () => {
+    const fresh = await fromStore($, await $.clock.now())
+    if (fresh) await update($, save, () => fresh)
+  })
 
 /** Applies an event, saves it across sessions, and toasts what happened. */
 const dispatch = async ($: EngineInterface, event: GameEvent) => {
-  const now = await $.clock.now()
-  const fresh = await fromStore($, now)
-  const box: { out?: ReturnType<typeof apply> } = {}
-  const next = await update($, save, s => {
-    box.out = apply(fresh ?? s, event, now)
-    return box.out.save
+  const out = await inTurn(async () => {
+    const now = await $.clock.now()
+    const fresh = await fromStore($, now)
+    const box: { out?: ReturnType<typeof apply> } = {}
+    const next = await update($, save, s => {
+      box.out = apply(fresh ?? s, event, now)
+      return box.out.save
+    })
+    await $.store.set('save', next)
+    return box.out
   })
-  await $.store.set('save', next)
-  const out = box.out
   if (out?.flash) {
     const shown = out.flash
     await update($, flash, () => shown)

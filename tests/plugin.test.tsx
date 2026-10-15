@@ -98,9 +98,18 @@ test('Claude can propose a quest and it lands in the log', async ($, on) => {
 })
 
 // Another session (or a background job) shares the store: back it with a map the test can write to.
-const sharedStore = (on: On) => {
+// `gate`, when given, holds the first read of the save after it is read, until the gate opens.
+const sharedStore = (on: On, gate?: Promise<void>) => {
   const disk = new Map<string, unknown>()
-  on('store.get', ($, e) => ({ value: disk.get(e.key) }))
+  let isHeld = false
+  on('store.get', async ($, e) => {
+    const value = disk.get(e.key)
+    if (gate && !isHeld) {
+      isHeld = true
+      await gate
+    }
+    return { value }
+  })
   on('store.set', ($, e) => {
     disk.set(e.key, e.value)
     return { value: undefined }
@@ -141,6 +150,29 @@ test('a commit here keeps a quest another session saved meanwhile', async ($, on
   const saved = disk.get('save') as Save
   expect(saved.quests.some(q => q.name === 'Reopen the Phone Gate')).toBe(true)
   expect(saved.counters.commits).toBe(1)
+})
+
+test('two events landing at once in one session both count', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  // The first read of the save is held while the second event runs: the overlap Codex
+  // described, where the first would then write back a save missing the second.
+  let release = () => {}
+  const disk = sharedStore(on, new Promise<void>(resolve => (release = resolve)))
+  disk.set('save', loadSave(undefined, '2026-10-13'))
+  on('tool.call', () => ({
+    result: { stdout: '[main 1a2b3c] add thing\n 1 file changed', stderr: '', interrupted: false },
+  }))
+  const both = Promise.all([
+    $.tool.call({ tool: 'Bash', command: 'git commit -m "add thing"' } as never),
+    $.tool.call({ tool: 'Bash', command: 'bun test' } as never),
+  ])
+  await clock.advance(0)
+  release()
+  await both
+
+  const saved = disk.get('save') as Save
+  expect(saved.counters.commits).toBe(1)
+  expect(saved.counters.testPasses).toBe(1)
 })
 
 test('/quest shows a quest another session saved', async ($, on) => {
