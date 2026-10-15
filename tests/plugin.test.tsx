@@ -1,6 +1,10 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
+import type { Save } from '../types'
+import { apply } from '../hooks/engine'
+import { loadSave } from '../hooks/rules'
+
 const SURFACES = ['terminal', 'desktop'] as const
 const NOW = Date.UTC(2026, 9, 13, 12)
 
@@ -91,4 +95,65 @@ test('Claude can propose a quest and it lands in the log', async ($, on) => {
   const ui = await $.ui.mount(pane('terminal'))
   expect(await ui.find({ type: 'Text', text: /Polish the README/ })).toBeDefined()
   expect(await ui.find({ key: 'abandon-q-1' })).toBeDefined()
+})
+
+// Another session (or a background job) shares the store: back it with a map the test can write to.
+const sharedStore = (on: On) => {
+  const disk = new Map<string, unknown>()
+  on('store.get', ($, e) => ({ value: disk.get(e.key) }))
+  on('store.set', ($, e) => {
+    disk.set(e.key, e.value)
+    return { value: undefined }
+  })
+  return disk
+}
+
+const otherSessionProposes = (disk: Map<string, unknown>) => {
+  const out = apply(
+    loadSave(disk.get('save'), '2026-10-13'),
+    {
+      kind: 'propose',
+      quest: {
+        name: 'Reopen the Phone Gate',
+        objective: 'SSH from the phone connects again',
+        category: 'system',
+        tier: 'common',
+        tasks: ['Connect from the phone'],
+      },
+    },
+    NOW,
+  )
+  disk.set('save', out.save)
+}
+
+test('a commit here keeps a quest another session saved meanwhile', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const disk = sharedStore(on)
+  on('tool.call', () => ({
+    result: { stdout: '[main 1a2b3c] add thing\n 1 file changed', stderr: '', interrupted: false },
+  }))
+  // This session's copy is drawn first, then the other session saves a quest.
+  await $.ui.mount(band('terminal'))
+  otherSessionProposes(disk)
+
+  await $.tool.call({ tool: 'Bash', command: 'git commit -m "add thing"' } as never)
+
+  const saved = disk.get('save') as Save
+  expect(saved.quests.some(q => q.name === 'Reopen the Phone Gate')).toBe(true)
+  expect(saved.counters.commits).toBe(1)
+})
+
+test('/quest shows a quest another session saved', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const disk = sharedStore(on)
+  on('command.run', () => ({ text: '' }))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  const ui = await $.ui.mount(pane('terminal'))
+  await ui.press({ key: 'tab-quests' })
+  expect(await ui.find({ type: 'Text', text: /Reopen the Phone Gate/ })).toBeUndefined()
+
+  otherSessionProposes(disk)
+  await $.command.run({ command: 'quest', args: '' } as never)
+
+  expect(await ui.find({ type: 'Text', text: /Reopen the Phone Gate/ })).toBeDefined()
 })
