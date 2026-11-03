@@ -77,6 +77,8 @@ Levels need 100, 300, 600, 1000, ... XP in total (`50 * (L - 1) * L`).
 **Claude as quest giver.** Claude can propose quests (common to epic) and mark
 its own tasks done with evidence. It picks a tier, never an XP amount, and only
 you claim rewards. Tasks marked *(auto)* tick themselves when the work happens.
+Up to 20 of Claude's quests can be open at once; finish or abandon one to make
+room for the next.
 
 ## Your progress
 

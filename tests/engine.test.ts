@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { apply } from '../hooks/engine'
+import { MAX_CLAUDE_QUESTS, apply } from '../hooks/engine'
 import { COMMIT, PASSIVE, QUEST_XP, TESTS, commandWords, freshSave, levelOf, loadSave, xpForLevel } from '../hooks/rules'
 
 const NOW = Date.UTC(2026, 9, 13, 12)
@@ -78,6 +78,24 @@ describe('quests', () => {
     expect(noEvidence.error).toBeDefined()
     const done = apply(out.save, { kind: 'task-done', questId: 'q-1', task: 1, evidence: 'README.md written' }, NOW)
     expect(done.save.quests.find(q => q.id === 'q-1')?.tasks[0]?.done).toBe(true)
+  })
+
+  test('the log holds 20 of Claude quests until one is finished or abandoned', async () => {
+    const propose = (save: ReturnType<typeof start>, n: number) =>
+      apply(save, { kind: 'propose', quest: { name: `Quest ${n}`, objective: 'x', category: 'build', tier: 'common', tasks: ['a'] } }, NOW)
+    expect(MAX_CLAUDE_QUESTS).toBe(20)
+    let save = start()
+    for (let i = 1; i <= 20; i += 1) {
+      const out = propose(save, i)
+      expect(out.error).toBeUndefined()
+      save = out.save
+    }
+    const full = propose(save, 21)
+    expect(full.error).toBeDefined()
+    expect(full.save.quests).toHaveLength(save.quests.length)
+
+    save = apply(save, { kind: 'abandon', questId: 'q-1' }, NOW).save
+    expect(propose(save, 21).error).toBeUndefined()
   })
 })
 

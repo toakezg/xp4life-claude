@@ -45,7 +45,7 @@ export type Outcome = {
 
 /** Tiers Claude may propose; legendary and above are earned, not assigned. */
 export const PROPOSABLE: Tier[] = ['common', 'uncommon', 'rare', 'epic']
-export const MAX_CLAUDE_QUESTS = 6
+export const MAX_CLAUDE_QUESTS = 20
 
 /** Applies one event to the save. Pure: the same save, event and time give the same outcome. */
 export const apply = (before: Save, event: GameEvent, now: number): Outcome => {
