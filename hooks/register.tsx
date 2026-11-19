@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Save, Tab, Tier } from '../types'
 import { MAX_CLAUDE_QUESTS, PROPOSABLE, apply } from './engine'
-import type { GameEvent } from './engine'
+import type { GameEvent, Outcome } from './engine'
 import { ART_COLUMNS, ART_ROWS, EMBLEM, EMBLEM_COLUMNS, EMBLEM_ROWS, LOOT } from './loot'
 import {
   ACHIEVEMENTS,
@@ -53,7 +53,7 @@ const fromStore = async ($: EngineInterface, now: number) => {
 /**
  * Runs this session's reads and writes of the save one at a time, so two events landing
  * together (a claim press during a test run) each start from the other's result.
- * Sessions still race each other: the store has no conditional write to stop that.
+ * Sessions still race each other, as the store has no conditional write: `recheck` covers that.
  */
 let queue: Promise<unknown> = Promise.resolve()
 const inTurn = <T,>(work: () => Promise<T>) => {
@@ -62,6 +62,60 @@ const inTurn = <T,>(work: () => Promise<T>) => {
   return run
 }
 
+/** How many event ids a save remembers, for `recheck` to find its own. */
+const RECENT = 100
+/**
+ * How long after saving an event to read the save back. Another session writes within
+ * moments of reading, so one that read before this session wrote has written by then.
+ */
+const RECHECK_MS = 2_000
+/** Read-backs per event: each that finds the event missing puts it back and looks again. */
+const RECHECK_TRIES = 3
+/** Kinds where only the latest counts: putting back an older one would undo a newer. */
+const LATEST_WINS: GameEvent['kind'][] = ['equip', 'tests']
+/** This session's latest saved event id of each kind in LATEST_WINS. */
+const latest = new Map<GameEvent['kind'], string>()
+
+/**
+ * Applies an event to the stored save (this session's copy when nothing is stored yet),
+ * notes its id among the save's recent events, and writes it. With `onlyIfMissing`, leaves
+ * a stored save that already holds the event alone.
+ */
+const saveEvent = ($: EngineInterface, id: string, event: GameEvent, now: number, onlyIfMissing = false) =>
+  inTurn(async () => {
+    const fresh = await fromStore($, now)
+    if (onlyIfMissing && fresh?.recent.includes(id)) return undefined
+    const box: { out?: ReturnType<typeof apply> } = {}
+    const next = await update($, save, s => {
+      box.out = apply(fresh ?? s, event, now)
+      return { ...box.out.save, recent: [...box.out.save.recent, id].slice(-RECENT) }
+    })
+    await $.store.set('save', next)
+    return box.out
+  })
+
+/**
+ * Reads the save back a little after this session wrote it. Another session that read the
+ * save before that write may since have written over it, without this event: if so, the
+ * event is applied again on top of what that session wrote, unless this session has saved
+ * a newer one of a kind where only the latest counts. Resolves to the outcome of applying
+ * it again, or undefined when that was not needed.
+ */
+const recheck = ($: EngineInterface, id: string, event: GameEvent, now: number, tries = RECHECK_TRIES) =>
+  new Promise<Outcome | undefined>(resolve => {
+    $.clock.after(RECHECK_MS, () => {
+      const newest = latest.get(event.kind)
+      if (newest !== undefined && newest !== id) return resolve(undefined)
+      saveEvent($, id, event, now, true).then(
+        out => {
+          if (out && tries > 1) void recheck($, id, event, now, tries - 1)
+          resolve(out)
+        },
+        () => resolve(undefined),
+      )
+    })
+  })
+
 /** Refreshes this session's copy from the store, so the log and band show what other sessions did. */
 const sync = ($: EngineInterface) =>
   inTurn(async () => {
@@ -69,19 +123,16 @@ const sync = ($: EngineInterface) =>
     if (fresh) await update($, save, () => fresh)
   })
 
-/** Applies an event, saves it across sessions, and toasts what happened. */
-const dispatch = async ($: EngineInterface, event: GameEvent) => {
-  const out = await inTurn(async () => {
-    const now = await $.clock.now()
-    const fresh = await fromStore($, now)
-    const box: { out?: ReturnType<typeof apply> } = {}
-    const next = await update($, save, s => {
-      box.out = apply(fresh ?? s, event, now)
-      return box.out.save
-    })
-    await $.store.set('save', next)
-    return box.out
-  })
+/**
+ * Applies an event, saves it across sessions, and toasts what happened. With `settle`,
+ * resolves after the first read-back instead: to the outcome of applying it again, if it was.
+ */
+const dispatch = async ($: EngineInterface, event: GameEvent, settle = false) => {
+  const now = await $.clock.now()
+  const id = `${now.toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  const out = await saveEvent($, id, event, now)
+  if (out && !out.error && LATEST_WINS.includes(event.kind)) latest.set(event.kind, id)
+  const checked = out && !out.error ? recheck($, id, event, now) : undefined
   if (out?.flash) {
     const shown = out.flash
     await update($, flash, () => shown)
@@ -90,7 +141,7 @@ const dispatch = async ($: EngineInterface, event: GameEvent) => {
     })
   }
   if (out && out.notes.length > 0) $.ui.toast(out.notes.join('   ·   '))
-  return out
+  return settle ? ((await checked) ?? out) : out
 }
 
 // ---------------------------------------------------------------- drawing
@@ -430,16 +481,22 @@ export const register: Register = on => {
   on('tool.call', { tool: 'mcp__xp4life__propose_quest' }, async ($, e) => {
     const input = e as unknown as { name?: string; objective?: string; category?: string; tier?: string; tasks?: unknown }
     const tasks = Array.isArray(input.tasks) ? input.tasks.map(String) : []
-    const out = await dispatch($, {
-      kind: 'propose',
-      quest: {
-        name: String(input.name ?? ''),
-        objective: String(input.objective ?? ''),
-        category: String(input.category ?? 'general'),
-        tier: String(input.tier ?? 'common') as Tier,
-        tasks,
+    // Waits for the read-back: a proposal that another session wrote over at the same moment
+    // is added again under the next free id, and that is the id Claude must be given.
+    const out = await dispatch(
+      $,
+      {
+        kind: 'propose',
+        quest: {
+          name: String(input.name ?? ''),
+          objective: String(input.objective ?? ''),
+          category: String(input.category ?? 'general'),
+          tier: String(input.tier ?? 'common') as Tier,
+          tasks,
+        },
       },
-    })
+      true,
+    )
     if (!out || out.error) return { result: `Not added: ${out?.error ?? 'unknown error'}` }
     return {
       result: `Added quest ${out.questId}. The user sees it in /quest and claims it when every task is done. At most ${MAX_CLAUDE_QUESTS} of your quests can be open at once.`,
