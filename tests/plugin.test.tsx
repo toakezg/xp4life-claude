@@ -117,9 +117,10 @@ const sharedStore = (on: On, gate?: Promise<void>) => {
   return disk
 }
 
-const otherSessionProposes = (disk: Map<string, unknown>) => {
+// `read` is the save as the other session read it: by default, what is on disk now.
+const otherSessionProposes = (disk: Map<string, unknown>, read = disk.get('save')) => {
   const out = apply(
-    loadSave(disk.get('save'), '2026-10-13'),
+    loadSave(read, '2026-10-13'),
     {
       kind: 'propose',
       quest: {
@@ -173,6 +174,41 @@ test('two events landing at once in one session both count', async ($, on) => {
   const saved = disk.get('save') as Save
   expect(saved.counters.commits).toBe(1)
   expect(saved.counters.testPasses).toBe(1)
+})
+
+test('two sessions saving at the same moment both keep their updates', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const disk = sharedStore(on)
+  disk.set('save', loadSave(undefined, '2026-10-13'))
+  on('tool.call', () => ({
+    result: { stdout: '[main 1a2b3c] add thing\n 1 file changed', stderr: '', interrupted: false },
+  }))
+  // The other session reads the save, this one commits and writes, then the other writes
+  // what it read plus its quest: the store keeps the last write, without the commit.
+  const otherRead = disk.get('save')
+  await $.tool.call({ tool: 'Bash', command: 'git commit -m "add thing"' } as never)
+  otherSessionProposes(disk, otherRead)
+  expect((disk.get('save') as Save).counters.commits).toBe(0)
+
+  await clock.advance(5_000)
+
+  const saved = disk.get('save') as Save
+  expect(saved.quests.some(q => q.name === 'Reopen the Phone Gate')).toBe(true)
+  expect(saved.counters.commits).toBe(1)
+})
+
+test('reading the save back adds nothing when no other session wrote over it', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const disk = sharedStore(on)
+  on('tool.call', () => ({
+    result: { stdout: '[main 1a2b3c] add thing\n 1 file changed', stderr: '', interrupted: false },
+  }))
+  await $.tool.call({ tool: 'Bash', command: 'git commit -m "add thing"' } as never)
+  await clock.advance(5_000)
+
+  const saved = disk.get('save') as Save
+  expect(saved.counters.commits).toBe(1)
+  expect(saved.xp).toBe(45)
 })
 
 test('/quest shows a quest another session saved', async ($, on) => {
