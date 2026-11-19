@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Save, Tab, Tier } from '../types'
 import { MAX_CLAUDE_QUESTS, PROPOSABLE, apply } from './engine'
-import type { GameEvent } from './engine'
+import type { GameEvent, Outcome } from './engine'
 import { ART_COLUMNS, ART_ROWS, EMBLEM, EMBLEM_COLUMNS, EMBLEM_ROWS, LOOT } from './loot'
 import {
   ACHIEVEMENTS,
@@ -71,6 +71,10 @@ const RECENT = 100
 const RECHECK_MS = 2_000
 /** Read-backs per event: each that finds the event missing puts it back and looks again. */
 const RECHECK_TRIES = 3
+/** Kinds where only the latest counts: putting back an older one would undo a newer. */
+const LATEST_WINS: GameEvent['kind'][] = ['equip', 'tests']
+/** This session's latest saved event id of each kind in LATEST_WINS. */
+const latest = new Map<GameEvent['kind'], string>()
 
 /**
  * Applies an event to the stored save (this session's copy when nothing is stored yet),
@@ -93,15 +97,24 @@ const saveEvent = ($: EngineInterface, id: string, event: GameEvent, now: number
 /**
  * Reads the save back a little after this session wrote it. Another session that read the
  * save before that write may since have written over it, without this event: if so, the
- * event is applied again on top of what that session wrote.
+ * event is applied again on top of what that session wrote, unless this session has saved
+ * a newer one of a kind where only the latest counts. Resolves to the outcome of applying
+ * it again, or undefined when that was not needed.
  */
-const recheck = ($: EngineInterface, id: string, event: GameEvent, now: number, tries = RECHECK_TRIES) => {
-  $.clock.after(RECHECK_MS, () => {
-    void saveEvent($, id, event, now, true).then(out => {
-      if (out && tries > 1) recheck($, id, event, now, tries - 1)
+const recheck = ($: EngineInterface, id: string, event: GameEvent, now: number, tries = RECHECK_TRIES) =>
+  new Promise<Outcome | undefined>(resolve => {
+    $.clock.after(RECHECK_MS, () => {
+      const newest = latest.get(event.kind)
+      if (newest !== undefined && newest !== id) return resolve(undefined)
+      saveEvent($, id, event, now, true).then(
+        out => {
+          if (out && tries > 1) void recheck($, id, event, now, tries - 1)
+          resolve(out)
+        },
+        () => resolve(undefined),
+      )
     })
   })
-}
 
 /** Refreshes this session's copy from the store, so the log and band show what other sessions did. */
 const sync = ($: EngineInterface) =>
@@ -110,12 +123,16 @@ const sync = ($: EngineInterface) =>
     if (fresh) await update($, save, () => fresh)
   })
 
-/** Applies an event, saves it across sessions, and toasts what happened. */
-const dispatch = async ($: EngineInterface, event: GameEvent) => {
+/**
+ * Applies an event, saves it across sessions, and toasts what happened. With `settle`,
+ * resolves after the first read-back instead: to the outcome of applying it again, if it was.
+ */
+const dispatch = async ($: EngineInterface, event: GameEvent, settle = false) => {
   const now = await $.clock.now()
   const id = `${now.toString(36)}-${Math.random().toString(36).slice(2, 10)}`
   const out = await saveEvent($, id, event, now)
-  if (out && !out.error) recheck($, id, event, now)
+  if (out && !out.error && LATEST_WINS.includes(event.kind)) latest.set(event.kind, id)
+  const checked = out && !out.error ? recheck($, id, event, now) : undefined
   if (out?.flash) {
     const shown = out.flash
     await update($, flash, () => shown)
@@ -124,7 +141,7 @@ const dispatch = async ($: EngineInterface, event: GameEvent) => {
     })
   }
   if (out && out.notes.length > 0) $.ui.toast(out.notes.join('   ·   '))
-  return out
+  return settle ? ((await checked) ?? out) : out
 }
 
 // ---------------------------------------------------------------- drawing
@@ -464,16 +481,22 @@ export const register: Register = on => {
   on('tool.call', { tool: 'mcp__xp4life__propose_quest' }, async ($, e) => {
     const input = e as unknown as { name?: string; objective?: string; category?: string; tier?: string; tasks?: unknown }
     const tasks = Array.isArray(input.tasks) ? input.tasks.map(String) : []
-    const out = await dispatch($, {
-      kind: 'propose',
-      quest: {
-        name: String(input.name ?? ''),
-        objective: String(input.objective ?? ''),
-        category: String(input.category ?? 'general'),
-        tier: String(input.tier ?? 'common') as Tier,
-        tasks,
+    // Waits for the read-back: a proposal that another session wrote over at the same moment
+    // is added again under the next free id, and that is the id Claude must be given.
+    const out = await dispatch(
+      $,
+      {
+        kind: 'propose',
+        quest: {
+          name: String(input.name ?? ''),
+          objective: String(input.objective ?? ''),
+          category: String(input.category ?? 'general'),
+          tier: String(input.tier ?? 'common') as Tier,
+          tasks,
+        },
       },
-    })
+      true,
+    )
     if (!out || out.error) return { result: `Not added: ${out?.error ?? 'unknown error'}` }
     return {
       result: `Added quest ${out.questId}. The user sees it in /quest and claims it when every task is done. At most ${MAX_CLAUDE_QUESTS} of your quests can be open at once.`,
