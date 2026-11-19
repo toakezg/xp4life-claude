@@ -72,6 +72,8 @@ export type Save = {
   lastTestFailed: boolean
   lastTestRewardAt: number
   nextQuestId: number
+  /** Ids of the latest events saved, oldest first: how a session finds its own after another wrote. */
+  recent: string[]
 }
 
 export type Tab = 'quests' | 'hero' | 'deeds' | 'titles' | 'loot'

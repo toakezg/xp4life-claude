@@ -195,6 +195,7 @@ export const freshSave = (today: string): Save => ({
   lastTestFailed: false,
   lastTestRewardAt: 0,
   nextQuestId: 1,
+  recent: [],
 })
 
 /**
@@ -219,6 +220,7 @@ export const loadSave = (stored: unknown, today: string): Save => {
     inventory: Array.isArray(s.inventory) ? s.inventory : [],
     quests: Array.isArray(s.quests) ? s.quests : base.quests,
     log: Array.isArray(s.log) ? s.log : [],
+    recent: Array.isArray(s.recent) ? s.recent : [],
   }
 }
 
