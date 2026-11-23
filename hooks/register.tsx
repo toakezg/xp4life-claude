@@ -80,7 +80,7 @@ const LATEST_WINS: GameEvent['kind'][] = ['equip', 'tests']
 /** This session's latest saved event id of each kind in LATEST_WINS. */
 const latest = new Map<GameEvent['kind'], string>()
 /** This session's last test run, when it failed: its next pass slays that bug, if none has. */
-let ownFailure: string | undefined
+let ownFailure: { id: string; at: number } | undefined
 
 /**
  * Applies an event to the stored save (this session's copy when nothing is stored yet),
@@ -141,7 +141,7 @@ const dispatch = async ($: EngineInterface, given: GameEvent, settle = false) =>
   let event = given
   if (event.kind === 'tests') {
     event = { ...event, runId: id, afterFailure: ownFailure }
-    ownFailure = event.passed ? undefined : id
+    ownFailure = event.passed ? undefined : { id, at: now }
   }
   const out = await saveEvent($, id, event, now)
   if (out && !out.error && LATEST_WINS.includes(event.kind)) latest.set(event.kind, id)

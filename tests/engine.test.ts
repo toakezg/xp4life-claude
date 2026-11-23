@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { MAX_CLAUDE_QUESTS, apply } from '../hooks/engine'
+import { FAILURE_MEMORY_MS, MAX_CLAUDE_QUESTS, apply } from '../hooks/engine'
 import { COMMIT, PASSIVE, QUEST_XP, TESTS, commandWords, freshSave, levelOf, loadSave, xpForLevel } from '../hooks/rules'
 
 const NOW = Date.UTC(2026, 9, 13, 12)
@@ -41,9 +41,9 @@ describe('passive XP', () => {
   })
 
   test('a pass after this session failed slays the bug even when the save lost the failure', async () => {
-    const out = apply(start(), { kind: 'tests', passed: true, afterFailure: 'a1' }, NOW)
+    const out = apply(start(), { kind: 'tests', passed: true, afterFailure: { id: 'a1', at: NOW - 1000 } }, NOW)
     expect(out.save.counters.bugsSlain).toBe(1)
-    expect(out.save.slainFailures).toEqual(['a1'])
+    expect(out.save.slainFailures).toEqual([{ id: 'a1', at: NOW }])
   })
 
   test('each failure is slain once, whichever session passes first', async () => {
@@ -51,9 +51,33 @@ describe('passive XP', () => {
     const failed = apply(start(), { kind: 'tests', passed: false, runId: 'a1' }, NOW).save
     const bPassed = apply(failed, { kind: 'tests', passed: true, runId: 'b1' }, NOW + 1000).save
     expect(bPassed.counters.bugsSlain).toBe(1)
-    const aPassed = apply(bPassed, { kind: 'tests', passed: true, runId: 'a2', afterFailure: 'a1' }, NOW + 2000).save
+    const own = { id: 'a1', at: NOW }
+    const aPassed = apply(bPassed, { kind: 'tests', passed: true, runId: 'a2', afterFailure: own }, NOW + 2000).save
     expect(aPassed.counters.bugsSlain).toBe(1)
     expect(aPassed.counters.testPasses).toBe(2)
+  })
+
+  test('a slain failure is remembered for as long as a session can still pass after it', async () => {
+    // A fails and stays open; B slays it; other sessions then slay 150 more over three days.
+    let save = apply(start(), { kind: 'tests', passed: false, runId: 'a1' }, NOW).save
+    save = apply(save, { kind: 'tests', passed: true, runId: 'b1' }, NOW + 1000).save
+    for (let i = 0; i < 150; i += 1) {
+      const at = NOW + 2000 + i * 1000
+      save = apply(save, { kind: 'tests', passed: false, runId: `o${i}` }, at).save
+      save = apply(save, { kind: 'tests', passed: true, runId: `p${i}` }, at + 500).save
+    }
+    expect(save.counters.bugsSlain).toBe(151)
+    const later = NOW + 3 * 86_400_000
+    const aPassed = apply(save, { kind: 'tests', passed: true, afterFailure: { id: 'a1', at: NOW } }, later).save
+    expect(aPassed.counters.bugsSlain).toBe(151)
+  })
+
+  test('past the failure memory, an old failure slays nothing and its record is let go', async () => {
+    const slain = apply(start(), { kind: 'tests', passed: true, afterFailure: { id: 'a1', at: NOW } }, NOW).save
+    const later = NOW + FAILURE_MEMORY_MS + 1
+    const stale = apply(slain, { kind: 'tests', passed: true, afterFailure: { id: 'z1', at: NOW } }, later).save
+    expect(stale.counters.bugsSlain).toBe(1)
+    expect(stale.slainFailures).toEqual([])
   })
 
   test('a run older than the latest status, from any session, cannot reorder it', async () => {
@@ -67,7 +91,8 @@ describe('passive XP', () => {
 
   test('a replayed run adds its pass but leaves the status and any bug to the newer run', async () => {
     const failing = apply(start(), { kind: 'tests', passed: false }, NOW + 2000).save
-    const pass = apply(failing, { kind: 'tests', passed: true, afterFailure: 'a1', replay: true }, NOW).save
+    const own = { id: 'a1', at: NOW - 1000 }
+    const pass = apply(failing, { kind: 'tests', passed: true, afterFailure: own, replay: true }, NOW).save
     expect(pass.counters.testPasses).toBe(1)
     expect(pass.counters.bugsSlain).toBe(0)
     expect(pass.lastTestFailed).toBe(true)
