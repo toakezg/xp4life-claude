@@ -86,6 +86,9 @@ Everyone starts a fresh world at level 1. Your save is yours alone: it lives in
 the plugin's store under your Claude Code config
 (`~/.claude/plugins/store/`), never in this repository, so it carries across
 sessions and projects and nobody else's progress ships with the plugin.
+Sessions open side by side share it: each saves into the latest copy, and
+reads its save back a moment later to put back anything another session,
+saving at the same instant, wrote over.
 
 Updating the plugin replaces its code, not your save. A save from an older
 version is read as it is and gains any new fields with their defaults; the

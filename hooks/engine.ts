@@ -25,7 +25,14 @@ export type ProposedQuest = {
 
 export type GameEvent =
   | { kind: 'commit' }
-  | { kind: 'tests'; passed: boolean }
+  /**
+   * `runId`: this run, so its failure can be slain once. `afterFailure`: this session's
+   * failing run just before this one, so a pass slays that bug even if another session
+   * wrote over the failure, unless some session slew it already. `replay`: put back after
+   * a newer run of this session's was saved, so it adds its pass and progress but leaves
+   * `lastTestFailed` and any bug to the newer run. `lastTestRewardAt` never moves back.
+   */
+  | { kind: 'tests'; passed: boolean; runId?: string; afterFailure?: { id: string; at: number }; replay?: boolean }
   | { kind: 'new-file' }
   | { kind: 'claim'; questId: string; roll: number; pick: number }
   | { kind: 'propose'; quest: ProposedQuest }
@@ -46,6 +53,12 @@ export type Outcome = {
 /** Tiers Claude may propose; legendary and above are earned, not assigned. */
 export const PROPOSABLE: Tier[] = ['common', 'uncommon', 'rare', 'epic']
 export const MAX_CLAUDE_QUESTS = 20
+/**
+ * How long a session's own failure can still be slain through `afterFailure`, and so how
+ * long a slain failure is remembered: a failure is slain after it ran, so its record
+ * outlasts every session that could still pass after it.
+ */
+export const FAILURE_MEMORY_MS = 7 * 86_400_000
 
 /** Applies one event to the save. Pure: the same save, event and time give the same outcome. */
 export const apply = (before: Save, event: GameEvent, now: number): Outcome => {
@@ -120,12 +133,34 @@ export const apply = (before: Save, event: GameEvent, now: number): Outcome => {
       break
     }
     case 'tests': {
+      // A run older than the save's latest status, from any session (one put back after
+      // another session wrote over it), counts as a replay too: it cannot reorder the status.
+      const isReplay = event.replay === true || now < (save.lastTestAt ?? 0)
+      if (!isReplay) save.lastTestAt = now
       if (!event.passed) {
-        save.lastTestFailed = true
+        if (!isReplay) {
+          save.lastTestFailed = true
+          save.openFailure = event.runId
+        }
         break
       }
-      const wasFailing = save.lastTestFailed
-      save.lastTestFailed = false
+      // The failures this pass slays: the save's open one, and this session's own if it is
+      // within the failure memory and no session has slain it yet. Each is recorded with
+      // when it was slain, so another pass cannot slay it again while it is remembered.
+      save.slainFailures = save.slainFailures.filter(f => now - f.at < FAILURE_MEMORY_MS)
+      const own = event.afterFailure
+      const isOwnOpen =
+        own !== undefined && now - own.at < FAILURE_MEMORY_MS && !save.slainFailures.some(f => f.id === own.id)
+      const wasFailing = !isReplay && (save.lastTestFailed || isOwnOpen)
+      if (wasFailing) {
+        const slain = [save.lastTestFailed ? save.openFailure : undefined, isOwnOpen ? own.id : undefined]
+        const ids = [...new Set(slain.filter((id): id is string => id !== undefined))]
+        save.slainFailures = [...save.slainFailures, ...ids.map(id => ({ id, at: now }))]
+      }
+      if (!isReplay) {
+        save.lastTestFailed = false
+        delete save.openFailure
+      }
       save.counters.testPasses += 1
       if (wasFailing) {
         save.counters.bugsSlain += 1
@@ -134,7 +169,7 @@ export const apply = (before: Save, event: GameEvent, now: number): Outcome => {
       } else if (now - save.lastTestRewardAt >= PASSIVE.testCooldownMs) {
         gain(PASSIVE.testPass, 'tests passing', true)
       }
-      save.lastTestRewardAt = now
+      save.lastTestRewardAt = Math.max(save.lastTestRewardAt, now)
       progress('test-pass')
       break
     }

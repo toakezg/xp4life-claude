@@ -9,8 +9,9 @@ const SURFACES = ['terminal', 'desktop'] as const
 const NOW = Date.UTC(2026, 9, 13, 12)
 
 const world = (on: On) => {
-  mock.clock(on, { now: NOW })
+  const clock = mock.clock(on, { now: NOW })
   mock.store(on)
+  return clock
 }
 
 const band = (surface: (typeof SURFACES)[number]) => ({
@@ -83,8 +84,9 @@ test('a legacy title can be equipped and shows on the hero tab', async ($, on) =
 })
 
 test('Claude can propose a quest and it lands in the log', async ($, on) => {
-  world(on)
-  await $.tool.call({
+  const clock = world(on)
+  // A proposal answers once the save is read back, two seconds on.
+  const proposed = $.tool.call({
     tool: 'mcp__xp4life__propose_quest',
     name: 'Polish the README',
     objective: 'A newcomer can install it from the README alone',
@@ -92,6 +94,8 @@ test('Claude can propose a quest and it lands in the log', async ($, on) => {
     tier: 'uncommon',
     tasks: ['Write install steps', 'Add a screenshot'],
   } as never)
+  await clock.advance(5_000)
+  await proposed
   const ui = await $.ui.mount(pane('terminal'))
   expect(await ui.find({ type: 'Text', text: /Polish the README/ })).toBeDefined()
   expect(await ui.find({ key: 'abandon-q-1' })).toBeDefined()
@@ -117,9 +121,10 @@ const sharedStore = (on: On, gate?: Promise<void>) => {
   return disk
 }
 
-const otherSessionProposes = (disk: Map<string, unknown>) => {
+// `read` is the save as the other session read it: by default, what is on disk now.
+const otherSessionProposes = (disk: Map<string, unknown>, read = disk.get('save')) => {
   const out = apply(
-    loadSave(disk.get('save'), '2026-10-13'),
+    loadSave(read, '2026-10-13'),
     {
       kind: 'propose',
       quest: {
@@ -172,6 +177,227 @@ test('two events landing at once in one session both count', async ($, on) => {
 
   const saved = disk.get('save') as Save
   expect(saved.counters.commits).toBe(1)
+  expect(saved.counters.testPasses).toBe(1)
+})
+
+test('two sessions saving at the same moment both keep their updates', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const disk = sharedStore(on)
+  disk.set('save', loadSave(undefined, '2026-10-13'))
+  on('tool.call', () => ({
+    result: { stdout: '[main 1a2b3c] add thing\n 1 file changed', stderr: '', interrupted: false },
+  }))
+  // The other session reads the save, this one commits and writes, then the other writes
+  // what it read plus its quest: the store keeps the last write, without the commit.
+  const otherRead = disk.get('save')
+  await $.tool.call({ tool: 'Bash', command: 'git commit -m "add thing"' } as never)
+  otherSessionProposes(disk, otherRead)
+  expect((disk.get('save') as Save).counters.commits).toBe(0)
+
+  await clock.advance(5_000)
+
+  const saved = disk.get('save') as Save
+  expect(saved.quests.some(q => q.name === 'Reopen the Phone Gate')).toBe(true)
+  expect(saved.counters.commits).toBe(1)
+})
+
+test('reading the save back adds nothing when no other session wrote over it', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const disk = sharedStore(on)
+  on('tool.call', () => ({
+    result: { stdout: '[main 1a2b3c] add thing\n 1 file changed', stderr: '', interrupted: false },
+  }))
+  await $.tool.call({ tool: 'Bash', command: 'git commit -m "add thing"' } as never)
+  await clock.advance(5_000)
+
+  const saved = disk.get('save') as Save
+  expect(saved.counters.commits).toBe(1)
+  expect(saved.xp).toBe(45)
+})
+
+test('a proposal another session wrote over comes back under the id Claude is given', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const disk = sharedStore(on)
+  disk.set('save', loadSave(undefined, '2026-10-13'))
+  // Both sessions read the save and propose a quest, so both take q-1; the other writes last.
+  const otherRead = disk.get('save')
+  const proposed = $.tool.call({
+    tool: 'mcp__xp4life__propose_quest',
+    name: 'Polish the README',
+    objective: 'A newcomer can install it from the README alone',
+    category: 'build',
+    tier: 'uncommon',
+    tasks: ['Write install steps'],
+  } as never)
+  await clock.settle()
+  otherSessionProposes(disk, otherRead)
+  await clock.advance(5_000)
+
+  const saved = disk.get('save') as Save
+  expect(saved.quests.find(q => q.name === 'Reopen the Phone Gate')?.id).toBe('q-1')
+  expect(saved.quests.find(q => q.name === 'Polish the README')?.id).toBe('q-2')
+  expect(String(((await proposed) as { result?: unknown }).result)).toContain('Added quest q-2.')
+})
+
+test('an older equip is not put back over a newer one', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const disk = sharedStore(on)
+  disk.set('save', loadSave(undefined, '2026-10-13'))
+  const ui = await $.ui.mount(pane('terminal'))
+  await ui.press({ key: 'tab-titles' })
+  // The other session reads the save, this one equips, then the other writes over it.
+  const otherRead = disk.get('save')
+  await ui.press({ key: 'equip-7' })
+  await clock.settle()
+  otherSessionProposes(disk, otherRead)
+  // A newer pick here, inside the read-back's two seconds, is the one that stays.
+  await ui.press({ key: 'equip-8' })
+  await clock.settle()
+  await clock.advance(5_000)
+
+  const saved = disk.get('save') as Save
+  expect(saved.equipped).toBe(saved.titles[8])
+  expect(saved.quests.some(q => q.name === 'Reopen the Phone Gate')).toBe(true)
+})
+
+// A test runner whose next run passes or fails as the test says.
+const testRuns = (on: On) => {
+  const runs = { failing: false }
+  on('tool.call', () =>
+    runs.failing
+      ? { result: { stdout: '1 fail', stderr: '', interrupted: false }, isError: true }
+      : { result: { stdout: '3 pass', stderr: '', interrupted: false } },
+  )
+  return runs
+}
+
+test('a failure another session wrote over still makes the next pass slay the bug', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const disk = sharedStore(on)
+  disk.set('save', loadSave(undefined, '2026-10-13'))
+  const runs = testRuns(on)
+  // The other session reads the save, this one fails a run, then the other writes over it.
+  const otherRead = disk.get('save')
+  runs.failing = true
+  await $.tool.call({ tool: 'Bash', command: 'bun test' } as never)
+  otherSessionProposes(disk, otherRead)
+  // The fix lands inside the read-back's two seconds.
+  runs.failing = false
+  await $.tool.call({ tool: 'Bash', command: 'bun test' } as never)
+  await clock.advance(5_000)
+
+  const saved = disk.get('save') as Save
+  expect(saved.counters.bugsSlain).toBe(1)
+  expect(saved.counters.testPasses).toBe(1)
+  expect(saved.lastTestFailed).toBe(false)
+  expect(saved.quests.some(q => q.name === 'Reopen the Phone Gate')).toBe(true)
+})
+
+test('a pass another session wrote over still counts after a newer pass', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const disk = sharedStore(on)
+  disk.set('save', loadSave(undefined, '2026-10-13'))
+  testRuns(on)
+  const otherRead = disk.get('save')
+  await $.tool.call({ tool: 'Bash', command: 'bun test' } as never)
+  otherSessionProposes(disk, otherRead)
+  await $.tool.call({ tool: 'Bash', command: 'bun test' } as never)
+  await clock.advance(5_000)
+
+  const saved = disk.get('save') as Save
+  expect(saved.counters.testPasses).toBe(2)
+  expect(saved.counters.bugsSlain).toBe(0)
+  expect(saved.lastTestFailed).toBe(false)
+})
+
+test('a failure put back does not undo a newer pass', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const disk = sharedStore(on)
+  disk.set('save', loadSave(undefined, '2026-10-13'))
+  const runs = testRuns(on)
+  const otherRead = disk.get('save')
+  runs.failing = true
+  await $.tool.call({ tool: 'Bash', command: 'bun test' } as never)
+  otherSessionProposes(disk, otherRead)
+  runs.failing = false
+  await $.tool.call({ tool: 'Bash', command: 'bun test' } as never)
+  await clock.advance(5_000)
+  // A later pass is a plain pass: the failure was already slain, not left standing.
+  await $.tool.call({ tool: 'Bash', command: 'bun test' } as never)
+  await clock.advance(5_000)
+
+  const saved = disk.get('save') as Save
+  expect(saved.counters.bugsSlain).toBe(1)
+  expect(saved.counters.testPasses).toBe(2)
+  expect(saved.lastTestFailed).toBe(false)
+})
+
+test('a failure another session already slew is not slain again here', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const disk = sharedStore(on)
+  disk.set('save', loadSave(undefined, '2026-10-13'))
+  const runs = testRuns(on)
+  runs.failing = true
+  await $.tool.call({ tool: 'Bash', command: 'bun test' } as never)
+  await clock.advance(5_000)
+  // The other session passes after reading this one's failure: it slays the bug.
+  disk.set('save', apply(loadSave(disk.get('save'), '2026-10-13'), { kind: 'tests', passed: true }, NOW).save)
+  runs.failing = false
+  await $.tool.call({ tool: 'Bash', command: 'bun test' } as never)
+  await clock.advance(5_000)
+
+  const saved = disk.get('save') as Save
+  expect(saved.counters.bugsSlain).toBe(1)
+  expect(saved.counters.testPasses).toBe(2)
+})
+
+test('a burst of events inside one read-back window is counted once each', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const disk = sharedStore(on)
+  on('tool.call', () => ({
+    result: { stdout: '[main 1a2b3c] add thing\n 1 file changed', stderr: '', interrupted: false },
+  }))
+  for (let i = 0; i < 101; i += 1) {
+    await $.tool.call({ tool: 'Bash', command: `git commit -m "change ${i}"` } as never)
+  }
+  await clock.advance(10_000)
+
+  expect((disk.get('save') as Save).counters.commits).toBe(101)
+})
+
+// Another session that read `read` saves a test run a second after this one's, over it.
+const otherSessionTests = (disk: Map<string, unknown>, read: unknown, passed: boolean) =>
+  disk.set('save', apply(loadSave(read, '2026-10-13'), { kind: 'tests', passed }, NOW + 1_000).save)
+
+test('a pass put back does not clear a newer failure from another session', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const disk = sharedStore(on)
+  disk.set('save', loadSave(undefined, '2026-10-13'))
+  testRuns(on)
+  const otherRead = disk.get('save')
+  await $.tool.call({ tool: 'Bash', command: 'bun test' } as never)
+  otherSessionTests(disk, otherRead, false)
+  await clock.advance(5_000)
+
+  const saved = disk.get('save') as Save
+  expect(saved.counters.testPasses).toBe(1)
+  expect(saved.counters.bugsSlain).toBe(0)
+  expect(saved.lastTestFailed).toBe(true)
+})
+
+test('a failure put back does not undo a newer pass from another session', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const disk = sharedStore(on)
+  disk.set('save', loadSave(undefined, '2026-10-13'))
+  const runs = testRuns(on)
+  const otherRead = disk.get('save')
+  runs.failing = true
+  await $.tool.call({ tool: 'Bash', command: 'bun test' } as never)
+  otherSessionTests(disk, otherRead, true)
+  await clock.advance(5_000)
+
+  const saved = disk.get('save') as Save
+  expect(saved.lastTestFailed).toBe(false)
   expect(saved.counters.testPasses).toBe(1)
 })
 

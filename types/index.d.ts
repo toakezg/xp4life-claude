@@ -70,8 +70,22 @@ export type Save = {
   quests: Quest[]
   log: Gain[]
   lastTestFailed: boolean
+  /** When the run that set `lastTestFailed` ran: an older run, from any session, cannot change it. */
+  lastTestAt?: number
+  /** The failing run that set `lastTestFailed`, when known: the bug a pass slays. */
+  openFailure?: string
+  /**
+   * Failing runs whose bug a pass has slain, and when, oldest first: each is slain once, by
+   * any session. Kept for the engine's FAILURE_MEMORY_MS.
+   */
+  slainFailures: { id: string; at: number }[]
   lastTestRewardAt: number
   nextQuestId: number
+  /**
+   * Events saved in the last few minutes, and when, oldest first: how a session finds its own
+   * after another wrote.
+   */
+  recent: { id: string; at: number }[]
 }
 
 export type Tab = 'quests' | 'hero' | 'deeds' | 'titles' | 'loot'
