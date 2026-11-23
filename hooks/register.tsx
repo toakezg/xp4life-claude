@@ -62,8 +62,13 @@ const inTurn = <T,>(work: () => Promise<T>) => {
   return run
 }
 
-/** How many event ids a save remembers, for `recheck` to find its own. */
-const RECENT = 100
+/**
+ * How long a save remembers an event's id, for `recheck` to find its own. By age, not count:
+ * a burst of events must not push out an id whose read-back is still to come. Far longer
+ * than the read-backs take, and a read-back that comes later still (the machine slept) gives
+ * up rather than take a forgotten id for a lost event.
+ */
+const RECENT_MS = 10 * 60_000
 /**
  * How long after saving an event to read the save back. Another session writes within
  * moments of reading, so one that read before this session wrote has written by then.
@@ -90,11 +95,12 @@ let ownFailure: { id: string; at: number } | undefined
 const saveEvent = ($: EngineInterface, id: string, event: GameEvent, now: number, onlyIfMissing = false) =>
   inTurn(async () => {
     const fresh = await fromStore($, now)
-    if (onlyIfMissing && fresh?.recent.includes(id)) return undefined
+    if (onlyIfMissing && fresh?.recent.some(r => r.id === id)) return undefined
     const box: { out?: ReturnType<typeof apply> } = {}
     const next = await update($, save, s => {
       box.out = apply(fresh ?? s, event, now)
-      return { ...box.out.save, recent: [...box.out.save.recent, id].slice(-RECENT) }
+      const kept = box.out.save.recent.filter(r => now - r.at < RECENT_MS)
+      return { ...box.out.save, recent: [...kept, { id, at: now }] }
     })
     await $.store.set('save', next)
     return box.out
@@ -109,7 +115,8 @@ const saveEvent = ($: EngineInterface, id: string, event: GameEvent, now: number
  */
 const recheck = ($: EngineInterface, id: string, event: GameEvent, now: number, tries = RECHECK_TRIES) =>
   new Promise<Outcome | undefined>(resolve => {
-    $.clock.after(RECHECK_MS, () => {
+    $.clock.after(RECHECK_MS, async () => {
+      if ((await $.clock.now()) - now >= RECENT_MS) return resolve(undefined)
       const newest = latest.get(event.kind)
       const isSuperseded = newest !== undefined && newest !== id
       if (isSuperseded && event.kind !== 'tests') return resolve(undefined)

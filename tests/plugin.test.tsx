@@ -351,6 +351,20 @@ test('a failure another session already slew is not slain again here', async ($,
   expect(saved.counters.testPasses).toBe(2)
 })
 
+test('a burst of events inside one read-back window is counted once each', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const disk = sharedStore(on)
+  on('tool.call', () => ({
+    result: { stdout: '[main 1a2b3c] add thing\n 1 file changed', stderr: '', interrupted: false },
+  }))
+  for (let i = 0; i < 101; i += 1) {
+    await $.tool.call({ tool: 'Bash', command: `git commit -m "change ${i}"` } as never)
+  }
+  await clock.advance(10_000)
+
+  expect((disk.get('save') as Save).counters.commits).toBe(101)
+})
+
 // Another session that read `read` saves a test run a second after this one's, over it.
 const otherSessionTests = (disk: Map<string, unknown>, read: unknown, passed: boolean) =>
   disk.set('save', apply(loadSave(read, '2026-10-13'), { kind: 'tests', passed }, NOW + 1_000).save)

@@ -81,8 +81,11 @@ export type Save = {
   slainFailures: { id: string; at: number }[]
   lastTestRewardAt: number
   nextQuestId: number
-  /** Ids of the latest events saved, oldest first: how a session finds its own after another wrote. */
-  recent: string[]
+  /**
+   * Events saved in the last few minutes, and when, oldest first: how a session finds its own
+   * after another wrote.
+   */
+  recent: { id: string; at: number }[]
 }
 
 export type Tab = 'quests' | 'hero' | 'deeds' | 'titles' | 'loot'

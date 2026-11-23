@@ -221,7 +221,7 @@ export const loadSave = (stored: unknown, today: string): Save => {
     inventory: Array.isArray(s.inventory) ? s.inventory : [],
     quests: Array.isArray(s.quests) ? s.quests : base.quests,
     log: Array.isArray(s.log) ? s.log : [],
-    recent: Array.isArray(s.recent) ? s.recent : [],
+    recent: Array.isArray(s.recent) ? s.recent.filter(r => typeof r?.id === 'string' && typeof r.at === 'number') : [],
     slainFailures: Array.isArray(s.slainFailures)
       ? s.slainFailures.filter(f => typeof f?.id === 'string' && typeof f.at === 'number')
       : [],
