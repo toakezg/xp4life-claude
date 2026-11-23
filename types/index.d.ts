@@ -70,6 +70,8 @@ export type Save = {
   quests: Quest[]
   log: Gain[]
   lastTestFailed: boolean
+  /** When the run that set `lastTestFailed` ran: an older run, from any session, cannot change it. */
+  lastTestAt?: number
   /** The failing run that set `lastTestFailed`, when known: the bug a pass slays. */
   openFailure?: string
   /** Failing runs whose bug a pass has slain, oldest first: each is slain once, by any session. */

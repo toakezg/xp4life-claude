@@ -127,8 +127,12 @@ export const apply = (before: Save, event: GameEvent, now: number): Outcome => {
       break
     }
     case 'tests': {
+      // A run older than the save's latest status, from any session (one put back after
+      // another session wrote over it), counts as a replay too: it cannot reorder the status.
+      const isReplay = event.replay === true || now < (save.lastTestAt ?? 0)
+      if (!isReplay) save.lastTestAt = now
       if (!event.passed) {
-        if (!event.replay) {
+        if (!isReplay) {
           save.lastTestFailed = true
           save.openFailure = event.runId
         }
@@ -138,13 +142,13 @@ export const apply = (before: Save, event: GameEvent, now: number): Outcome => {
       // session has slain it yet. Each is recorded, so another pass cannot slay it again.
       const own = event.afterFailure
       const isOwnOpen = own !== undefined && !save.slainFailures.includes(own)
-      const wasFailing = !event.replay && (save.lastTestFailed || isOwnOpen)
+      const wasFailing = !isReplay && (save.lastTestFailed || isOwnOpen)
       if (wasFailing) {
         const slain = [save.lastTestFailed ? save.openFailure : undefined, isOwnOpen ? own : undefined]
         const ids = slain.filter((id): id is string => id !== undefined)
         save.slainFailures = [...save.slainFailures, ...new Set(ids)].slice(-100)
       }
-      if (!event.replay) {
+      if (!isReplay) {
         save.lastTestFailed = false
         delete save.openFailure
       }

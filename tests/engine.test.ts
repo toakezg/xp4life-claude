@@ -56,6 +56,15 @@ describe('passive XP', () => {
     expect(aPassed.counters.testPasses).toBe(2)
   })
 
+  test('a run older than the latest status, from any session, cannot reorder it', async () => {
+    const failed = apply(start(), { kind: 'tests', passed: false, runId: 'b1' }, NOW + 1000).save
+    const older = apply(failed, { kind: 'tests', passed: true, runId: 'a1' }, NOW).save
+    expect(older.counters.testPasses).toBe(1)
+    expect(older.counters.bugsSlain).toBe(0)
+    expect(older.lastTestFailed).toBe(true)
+    expect(older.lastTestAt).toBe(NOW + 1000)
+  })
+
   test('a replayed run adds its pass but leaves the status and any bug to the newer run', async () => {
     const failing = apply(start(), { kind: 'tests', passed: false }, NOW + 2000).save
     const pass = apply(failing, { kind: 'tests', passed: true, afterFailure: 'a1', replay: true }, NOW).save
