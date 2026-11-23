@@ -332,6 +332,25 @@ test('a failure put back does not undo a newer pass', async ($, on) => {
   expect(saved.lastTestFailed).toBe(false)
 })
 
+test('a failure another session already slew is not slain again here', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const disk = sharedStore(on)
+  disk.set('save', loadSave(undefined, '2026-10-13'))
+  const runs = testRuns(on)
+  runs.failing = true
+  await $.tool.call({ tool: 'Bash', command: 'bun test' } as never)
+  await clock.advance(5_000)
+  // The other session passes after reading this one's failure: it slays the bug.
+  disk.set('save', apply(loadSave(disk.get('save'), '2026-10-13'), { kind: 'tests', passed: true }, NOW).save)
+  runs.failing = false
+  await $.tool.call({ tool: 'Bash', command: 'bun test' } as never)
+  await clock.advance(5_000)
+
+  const saved = disk.get('save') as Save
+  expect(saved.counters.bugsSlain).toBe(1)
+  expect(saved.counters.testPasses).toBe(2)
+})
+
 test('/quest shows a quest another session saved', async ($, on) => {
   mock.clock(on, { now: NOW })
   const disk = sharedStore(on)

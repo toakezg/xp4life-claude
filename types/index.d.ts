@@ -70,6 +70,10 @@ export type Save = {
   quests: Quest[]
   log: Gain[]
   lastTestFailed: boolean
+  /** The failing run that set `lastTestFailed`, when known: the bug a pass slays. */
+  openFailure?: string
+  /** Failing runs whose bug a pass has slain, oldest first: each is slain once, by any session. */
+  slainFailures: string[]
   lastTestRewardAt: number
   nextQuestId: number
   /** Ids of the latest events saved, oldest first: how a session finds its own after another wrote. */

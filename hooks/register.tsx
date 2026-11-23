@@ -79,8 +79,8 @@ const RECHECK_TRIES = 3
 const LATEST_WINS: GameEvent['kind'][] = ['equip', 'tests']
 /** This session's latest saved event id of each kind in LATEST_WINS. */
 const latest = new Map<GameEvent['kind'], string>()
-/** Whether this session's last test run failed, so its next pass slays that bug. */
-let ownTestFailed = false
+/** This session's last test run, when it failed: its next pass slays that bug, if none has. */
+let ownFailure: string | undefined
 
 /**
  * Applies an event to the stored save (this session's copy when nothing is stored yet),
@@ -137,12 +137,12 @@ const sync = ($: EngineInterface) =>
  */
 const dispatch = async ($: EngineInterface, given: GameEvent, settle = false) => {
   const now = await $.clock.now()
+  const id = `${now.toString(36)}-${Math.random().toString(36).slice(2, 10)}`
   let event = given
   if (event.kind === 'tests') {
-    event = { ...event, afterFailure: ownTestFailed }
-    ownTestFailed = !event.passed
+    event = { ...event, runId: id, afterFailure: ownFailure }
+    ownFailure = event.passed ? undefined : id
   }
-  const id = `${now.toString(36)}-${Math.random().toString(36).slice(2, 10)}`
   const out = await saveEvent($, id, event, now)
   if (out && !out.error && LATEST_WINS.includes(event.kind)) latest.set(event.kind, id)
   const checked = out && !out.error ? recheck($, id, event, now) : undefined

@@ -26,12 +26,13 @@ export type ProposedQuest = {
 export type GameEvent =
   | { kind: 'commit' }
   /**
-   * `afterFailure`: this session's run before this one failed, so a pass slays that bug
-   * even if another session wrote over the failure. `replay`: put back after a newer run
-   * of this session's was saved, so it adds its pass and progress but leaves
+   * `runId`: this run, so its failure can be slain once. `afterFailure`: this session's
+   * failing run just before this one, so a pass slays that bug even if another session
+   * wrote over the failure, unless some session slew it already. `replay`: put back after
+   * a newer run of this session's was saved, so it adds its pass and progress but leaves
    * `lastTestFailed` and any bug to the newer run. `lastTestRewardAt` never moves back.
    */
-  | { kind: 'tests'; passed: boolean; afterFailure?: boolean; replay?: boolean }
+  | { kind: 'tests'; passed: boolean; runId?: string; afterFailure?: string; replay?: boolean }
   | { kind: 'new-file' }
   | { kind: 'claim'; questId: string; roll: number; pick: number }
   | { kind: 'propose'; quest: ProposedQuest }
@@ -127,11 +128,26 @@ export const apply = (before: Save, event: GameEvent, now: number): Outcome => {
     }
     case 'tests': {
       if (!event.passed) {
-        if (!event.replay) save.lastTestFailed = true
+        if (!event.replay) {
+          save.lastTestFailed = true
+          save.openFailure = event.runId
+        }
         break
       }
-      const wasFailing = !event.replay && (save.lastTestFailed || event.afterFailure === true)
-      if (!event.replay) save.lastTestFailed = false
+      // The failures this pass slays: the save's open one, and this session's own if no
+      // session has slain it yet. Each is recorded, so another pass cannot slay it again.
+      const own = event.afterFailure
+      const isOwnOpen = own !== undefined && !save.slainFailures.includes(own)
+      const wasFailing = !event.replay && (save.lastTestFailed || isOwnOpen)
+      if (wasFailing) {
+        const slain = [save.lastTestFailed ? save.openFailure : undefined, isOwnOpen ? own : undefined]
+        const ids = slain.filter((id): id is string => id !== undefined)
+        save.slainFailures = [...save.slainFailures, ...new Set(ids)].slice(-100)
+      }
+      if (!event.replay) {
+        save.lastTestFailed = false
+        delete save.openFailure
+      }
       save.counters.testPasses += 1
       if (wasFailing) {
         save.counters.bugsSlain += 1

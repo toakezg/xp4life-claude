@@ -41,13 +41,24 @@ describe('passive XP', () => {
   })
 
   test('a pass after this session failed slays the bug even when the save lost the failure', async () => {
-    const out = apply(start(), { kind: 'tests', passed: true, afterFailure: true }, NOW)
+    const out = apply(start(), { kind: 'tests', passed: true, afterFailure: 'a1' }, NOW)
     expect(out.save.counters.bugsSlain).toBe(1)
+    expect(out.save.slainFailures).toEqual(['a1'])
+  })
+
+  test('each failure is slain once, whichever session passes first', async () => {
+    // Session A fails, session B passes and slays it, then A passes.
+    const failed = apply(start(), { kind: 'tests', passed: false, runId: 'a1' }, NOW).save
+    const bPassed = apply(failed, { kind: 'tests', passed: true, runId: 'b1' }, NOW + 1000).save
+    expect(bPassed.counters.bugsSlain).toBe(1)
+    const aPassed = apply(bPassed, { kind: 'tests', passed: true, runId: 'a2', afterFailure: 'a1' }, NOW + 2000).save
+    expect(aPassed.counters.bugsSlain).toBe(1)
+    expect(aPassed.counters.testPasses).toBe(2)
   })
 
   test('a replayed run adds its pass but leaves the status and any bug to the newer run', async () => {
     const failing = apply(start(), { kind: 'tests', passed: false }, NOW + 2000).save
-    const pass = apply(failing, { kind: 'tests', passed: true, afterFailure: true, replay: true }, NOW).save
+    const pass = apply(failing, { kind: 'tests', passed: true, afterFailure: 'a1', replay: true }, NOW).save
     expect(pass.counters.testPasses).toBe(1)
     expect(pass.counters.bugsSlain).toBe(0)
     expect(pass.lastTestFailed).toBe(true)

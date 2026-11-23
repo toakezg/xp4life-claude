@@ -193,6 +193,7 @@ export const freshSave = (today: string): Save => ({
   quests: [startQuest(AWAKENING[0]!, today)],
   log: [],
   lastTestFailed: false,
+  slainFailures: [],
   lastTestRewardAt: 0,
   nextQuestId: 1,
   recent: [],
@@ -221,6 +222,7 @@ export const loadSave = (stored: unknown, today: string): Save => {
     quests: Array.isArray(s.quests) ? s.quests : base.quests,
     log: Array.isArray(s.log) ? s.log : [],
     recent: Array.isArray(s.recent) ? s.recent : [],
+    slainFailures: Array.isArray(s.slainFailures) ? s.slainFailures : [],
   }
 }
 
