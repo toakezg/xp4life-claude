@@ -260,6 +260,78 @@ test('an older equip is not put back over a newer one', async ($, on) => {
   expect(saved.quests.some(q => q.name === 'Reopen the Phone Gate')).toBe(true)
 })
 
+// A test runner whose next run passes or fails as the test says.
+const testRuns = (on: On) => {
+  const runs = { failing: false }
+  on('tool.call', () =>
+    runs.failing
+      ? { result: { stdout: '1 fail', stderr: '', interrupted: false }, isError: true }
+      : { result: { stdout: '3 pass', stderr: '', interrupted: false } },
+  )
+  return runs
+}
+
+test('a failure another session wrote over still makes the next pass slay the bug', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const disk = sharedStore(on)
+  disk.set('save', loadSave(undefined, '2026-10-13'))
+  const runs = testRuns(on)
+  // The other session reads the save, this one fails a run, then the other writes over it.
+  const otherRead = disk.get('save')
+  runs.failing = true
+  await $.tool.call({ tool: 'Bash', command: 'bun test' } as never)
+  otherSessionProposes(disk, otherRead)
+  // The fix lands inside the read-back's two seconds.
+  runs.failing = false
+  await $.tool.call({ tool: 'Bash', command: 'bun test' } as never)
+  await clock.advance(5_000)
+
+  const saved = disk.get('save') as Save
+  expect(saved.counters.bugsSlain).toBe(1)
+  expect(saved.counters.testPasses).toBe(1)
+  expect(saved.lastTestFailed).toBe(false)
+  expect(saved.quests.some(q => q.name === 'Reopen the Phone Gate')).toBe(true)
+})
+
+test('a pass another session wrote over still counts after a newer pass', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const disk = sharedStore(on)
+  disk.set('save', loadSave(undefined, '2026-10-13'))
+  testRuns(on)
+  const otherRead = disk.get('save')
+  await $.tool.call({ tool: 'Bash', command: 'bun test' } as never)
+  otherSessionProposes(disk, otherRead)
+  await $.tool.call({ tool: 'Bash', command: 'bun test' } as never)
+  await clock.advance(5_000)
+
+  const saved = disk.get('save') as Save
+  expect(saved.counters.testPasses).toBe(2)
+  expect(saved.counters.bugsSlain).toBe(0)
+  expect(saved.lastTestFailed).toBe(false)
+})
+
+test('a failure put back does not undo a newer pass', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const disk = sharedStore(on)
+  disk.set('save', loadSave(undefined, '2026-10-13'))
+  const runs = testRuns(on)
+  const otherRead = disk.get('save')
+  runs.failing = true
+  await $.tool.call({ tool: 'Bash', command: 'bun test' } as never)
+  otherSessionProposes(disk, otherRead)
+  runs.failing = false
+  await $.tool.call({ tool: 'Bash', command: 'bun test' } as never)
+  await clock.advance(5_000)
+  // A later pass is a plain pass: the failure was already slain, not left standing.
+  await $.tool.call({ tool: 'Bash', command: 'bun test' } as never)
+  await clock.advance(5_000)
+
+  const saved = disk.get('save') as Save
+  expect(saved.counters.bugsSlain).toBe(1)
+  expect(saved.counters.testPasses).toBe(2)
+  expect(saved.lastTestFailed).toBe(false)
+})
+
 test('/quest shows a quest another session saved', async ($, on) => {
   mock.clock(on, { now: NOW })
   const disk = sharedStore(on)

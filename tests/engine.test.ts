@@ -39,6 +39,24 @@ describe('passive XP', () => {
     expect(twice.xp).toBe(once.xp)
     expect(twice.counters.testPasses).toBe(2)
   })
+
+  test('a pass after this session failed slays the bug even when the save lost the failure', async () => {
+    const out = apply(start(), { kind: 'tests', passed: true, afterFailure: true }, NOW)
+    expect(out.save.counters.bugsSlain).toBe(1)
+  })
+
+  test('a replayed run adds its pass but leaves the status and any bug to the newer run', async () => {
+    const failing = apply(start(), { kind: 'tests', passed: false }, NOW + 2000).save
+    const pass = apply(failing, { kind: 'tests', passed: true, afterFailure: true, replay: true }, NOW).save
+    expect(pass.counters.testPasses).toBe(1)
+    expect(pass.counters.bugsSlain).toBe(0)
+    expect(pass.lastTestFailed).toBe(true)
+
+    const passed = apply(start(), { kind: 'tests', passed: true }, NOW + 2000).save
+    const fail = apply(passed, { kind: 'tests', passed: false, replay: true }, NOW).save
+    expect(fail.lastTestFailed).toBe(false)
+    expect(fail.lastTestRewardAt).toBe(NOW + 2000)
+  })
 })
 
 describe('quests', () => {

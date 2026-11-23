@@ -25,7 +25,13 @@ export type ProposedQuest = {
 
 export type GameEvent =
   | { kind: 'commit' }
-  | { kind: 'tests'; passed: boolean }
+  /**
+   * `afterFailure`: this session's run before this one failed, so a pass slays that bug
+   * even if another session wrote over the failure. `replay`: put back after a newer run
+   * of this session's was saved, so it adds its pass and progress but leaves
+   * `lastTestFailed` and any bug to the newer run. `lastTestRewardAt` never moves back.
+   */
+  | { kind: 'tests'; passed: boolean; afterFailure?: boolean; replay?: boolean }
   | { kind: 'new-file' }
   | { kind: 'claim'; questId: string; roll: number; pick: number }
   | { kind: 'propose'; quest: ProposedQuest }
@@ -121,11 +127,11 @@ export const apply = (before: Save, event: GameEvent, now: number): Outcome => {
     }
     case 'tests': {
       if (!event.passed) {
-        save.lastTestFailed = true
+        if (!event.replay) save.lastTestFailed = true
         break
       }
-      const wasFailing = save.lastTestFailed
-      save.lastTestFailed = false
+      const wasFailing = !event.replay && (save.lastTestFailed || event.afterFailure === true)
+      if (!event.replay) save.lastTestFailed = false
       save.counters.testPasses += 1
       if (wasFailing) {
         save.counters.bugsSlain += 1
@@ -134,7 +140,7 @@ export const apply = (before: Save, event: GameEvent, now: number): Outcome => {
       } else if (now - save.lastTestRewardAt >= PASSIVE.testCooldownMs) {
         gain(PASSIVE.testPass, 'tests passing', true)
       }
-      save.lastTestRewardAt = now
+      save.lastTestRewardAt = Math.max(save.lastTestRewardAt, now)
       progress('test-pass')
       break
     }

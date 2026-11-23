@@ -71,10 +71,16 @@ const RECENT = 100
 const RECHECK_MS = 2_000
 /** Read-backs per event: each that finds the event missing puts it back and looks again. */
 const RECHECK_TRIES = 3
-/** Kinds where only the latest counts: putting back an older one would undo a newer. */
+/**
+ * Kinds where the latest sets a status a read-back must not undo: an older equip is not
+ * put back at all, and an older test run is put back as a replay, adding its pass and
+ * progress but leaving the status to the newer run.
+ */
 const LATEST_WINS: GameEvent['kind'][] = ['equip', 'tests']
 /** This session's latest saved event id of each kind in LATEST_WINS. */
 const latest = new Map<GameEvent['kind'], string>()
+/** Whether this session's last test run failed, so its next pass slays that bug. */
+let ownTestFailed = false
 
 /**
  * Applies an event to the stored save (this session's copy when nothing is stored yet),
@@ -97,16 +103,18 @@ const saveEvent = ($: EngineInterface, id: string, event: GameEvent, now: number
 /**
  * Reads the save back a little after this session wrote it. Another session that read the
  * save before that write may since have written over it, without this event: if so, the
- * event is applied again on top of what that session wrote, unless this session has saved
- * a newer one of a kind where only the latest counts. Resolves to the outcome of applying
- * it again, or undefined when that was not needed.
+ * event is applied again on top of what that session wrote. When this session has saved a
+ * newer one of a kind in LATEST_WINS, an equip stays dropped and a test run comes back as a
+ * replay. Resolves to the outcome of applying it again, or undefined when that was not needed.
  */
 const recheck = ($: EngineInterface, id: string, event: GameEvent, now: number, tries = RECHECK_TRIES) =>
   new Promise<Outcome | undefined>(resolve => {
     $.clock.after(RECHECK_MS, () => {
       const newest = latest.get(event.kind)
-      if (newest !== undefined && newest !== id) return resolve(undefined)
-      saveEvent($, id, event, now, true).then(
+      const isSuperseded = newest !== undefined && newest !== id
+      if (isSuperseded && event.kind !== 'tests') return resolve(undefined)
+      const again: GameEvent = isSuperseded && event.kind === 'tests' ? { ...event, replay: true } : event
+      saveEvent($, id, again, now, true).then(
         out => {
           if (out && tries > 1) void recheck($, id, event, now, tries - 1)
           resolve(out)
@@ -127,8 +135,13 @@ const sync = ($: EngineInterface) =>
  * Applies an event, saves it across sessions, and toasts what happened. With `settle`,
  * resolves after the first read-back instead: to the outcome of applying it again, if it was.
  */
-const dispatch = async ($: EngineInterface, event: GameEvent, settle = false) => {
+const dispatch = async ($: EngineInterface, given: GameEvent, settle = false) => {
   const now = await $.clock.now()
+  let event = given
+  if (event.kind === 'tests') {
+    event = { ...event, afterFailure: ownTestFailed }
+    ownTestFailed = !event.passed
+  }
   const id = `${now.toString(36)}-${Math.random().toString(36).slice(2, 10)}`
   const out = await saveEvent($, id, event, now)
   if (out && !out.error && LATEST_WINS.includes(event.kind)) latest.set(event.kind, id)
